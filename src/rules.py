@@ -1,13 +1,18 @@
 """急救车调度与目的地分流领域规则与状态转换。"""
 from typing import Any, Dict, Iterable, Tuple
 
-from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, number, text, text_list
+from .domain import Conflict, ValidationError, boolean, choice, integer, number, optional_text, text, text_list
 
 
 INITIAL_STATE = "received"
 CREATE_ROLES = {'dispatcher'}
+HOSPITAL_ROLES = {'dispatcher', 'hospital_coordinator'}
 ACTION_ROLES = {'assign': {'dispatcher'}, 'enroute': {'dispatcher', 'paramedic'}, 'arrive': {'paramedic'}, 'transport': {'paramedic', 'hospital_coordinator'}, 'handover': {'paramedic', 'hospital_coordinator'}, 'cancel': {'dispatcher'}}
 TRANSITIONS = {'assign': {'received': 'assigned'}, 'enroute': {'assigned': 'enroute'}, 'arrive': {'enroute': 'onscene'}, 'transport': {'onscene': 'transporting'}, 'handover': {'transporting': 'closed'}, 'cancel': {'received': 'cancelled', 'assigned': 'cancelled', 'enroute': 'cancelled'}}
+
+DEFAULT_HOLD_MINUTES = 30
+HOLD_MIN_MINUTES = 1
+HOLD_MAX_MINUTES = 240
 
 
 class DomainRules:
@@ -69,8 +74,8 @@ class DomainRules:
         if action == "assign":
             if not boolean(data, "vehicle_available"):
                 raise ValidationError("车辆当前不可用")
-            if not p["capability_ok"] or float(p["hospital_beds"]) <= 0:
-                raise ValidationError("车辆能力或医院床位不满足")
+            if not p["capability_ok"]:
+                raise ValidationError("车辆能力不满足任务要求")
             changes["assigned_vehicle_id"] = text(data, "vehicle_id")
             changes["assigned"] = True
             summary = "已完成派车"
@@ -100,3 +105,19 @@ class DomainRules:
             summary = "任务取消"
         p.update(changes)
         return new_state, p, summary or ("已执行%s" % action)
+
+    def validate_hold_minutes(self, data: Dict[str, Any]) -> float:
+        if data.get("hold_minutes") is None:
+            return float(DEFAULT_HOLD_MINUTES)
+        value = number(data, "hold_minutes", HOLD_MIN_MINUTES, HOLD_MAX_MINUTES)
+        return round(float(value), 1)
+
+    def validate_hospital(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        p = dict(payload or {})
+        hospital = {
+            "name": text(p, "name"),
+            "total_beds": integer(p, "total_beds", 0, 100000),
+        }
+        hospital["capabilities"] = text_list(p, "capabilities")
+        hospital["note"] = optional_text(p, "note")
+        return hospital

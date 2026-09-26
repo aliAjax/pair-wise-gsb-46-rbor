@@ -32,6 +32,7 @@ def main() -> None:
     args = parse_args()
     Path(args.db).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     service = build_service(args.db)
+    service.start_sweeper()
     server = create_server(args.host, args.port, service, BASE_DIR / "static")
     print("急救车调度与目的地分流 listening on http://%s:%s" % (args.host, args.port), flush=True)
     try:
@@ -40,6 +41,7 @@ def main() -> None:
         pass
     finally:
         server.server_close()
+        service.close()
 
 
 if __name__ == "__main__":

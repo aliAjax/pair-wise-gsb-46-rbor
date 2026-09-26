@@ -3,31 +3,249 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>急救车调度与目的地分流</title>
+  <title>急救车调度与床位承诺</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
-    pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 1.5rem; color: #17212b; background: #f7f8fa; }
+    main { max-width: 1080px; margin: auto; }
+    h1 { margin-bottom: .2rem; }
+    h2 { margin-top: 1.8rem; font-size: 1.1rem; border-left: 4px solid #2b6cb0; padding-left: .5rem; }
+    .hint { color: #5b6b7b; font-size: .85rem; }
+    .toolbar { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: .8rem 0; }
+    button { padding: .35rem .7rem; cursor: pointer; border: 1px solid #cbd5e0; background: #fff; border-radius: 6px; font-size: .82rem; }
+    button:hover { background: #edf2f7; }
+    button.primary { background: #2b6cb0; color: #fff; border-color: #2b6cb0; }
+    button.danger { color: #c53030; border-color: #feb2b2; }
+    table { border-collapse: collapse; width: 100%; background: #fff; font-size: .82rem; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+    th, td { border: 1px solid #e2e8f0; padding: .45rem .55rem; text-align: left; vertical-align: top; }
+    th { background: #edf2f7; white-space: nowrap; }
+    .tag { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .75rem; }
+    .held { background: #fefcbf; color: #975a16; }
+    .admitted { background: #c6f6d5; color: #22543d; }
+    .released { background: #e2e8f0; color: #4a5568; }
+    .short { color: #c53030; font-weight: 600; }
+    .ok { color: #2f855a; font-weight: 600; }
+    .muted { color: #718096; }
+    details { margin-top: 1.2rem; }
+    textarea { width: 100%; min-height: 120px; font-family: ui-monospace, monospace; font-size: .8rem; }
+    pre { background: #1a202c; color: #e2e8f0; padding: .8rem; overflow: auto; border-radius: 8px; font-size: .78rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>急救车调度与目的地分流</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>急救车调度与床位承诺</h1>
+  <p class="hint">确认派车即在医院台账上原子占用一张床；取消或超时未到场自动退回，医院交接后转为已收治。无余床的任务留在待派区并标注缺少床数。</p>
+  <div class="toolbar">
+    <button class="primary" id="refresh">刷新全部</button>
+    <button id="sweep">立即结算到期占用</button>
+    <label class="hint"><input type="checkbox" id="autorefresh" checked> 每 15 秒自动刷新</label>
+    <span class="hint" id="updated"></span>
+  </div>
+
+  <h2>医院床位总览</h2>
+  <table>
+    <thead><tr><th>医院</th><th>总床位</th><th>承诺占用中</th><th>已收治</th><th>余床</th><th>能力</th></tr></thead>
+    <tbody id="hospitals"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+  </table>
+
+  <h2>待派区（received）</h2>
+  <table>
+    <thead><tr><th>任务号</th><th>优先级</th><th>目的地医院</th><th>余床</th><th>缺床</th><th>车辆能力</th><th>操作</th></tr></thead>
+    <tbody id="pending"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+  </table>
+
+  <h2>进行中 / 已结束任务</h2>
+  <table>
+    <thead><tr><th>ID</th><th>任务号</th><th>状态</th><th>车辆</th><th>医院</th><th>版本</th><th>操作</th></tr></thead>
+    <tbody id="records"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+  </table>
+
+  <h2>床位承诺</h2>
+  <table>
+    <thead><tr><th>#</th><th>任务号</th><th>医院</th><th>状态</th><th>到期时间</th><th>到场时间</th><th>退回时间</th><th>退回原因</th><th>占用人</th></tr></thead>
+    <tbody id="commitments"><tr><td colspan="9" class="muted">加载中…</td></tr></tbody>
+  </table>
+
+  <details>
+    <summary>新建任务 / 登记医院（JSON）</summary>
+    <p class="hint">任务请求：{"reference":"EMG-...","data":{...}}；医院请求：{"data":{"name":"...","total_beds":3,"capabilities":["ALS"]}}</p>
+    <textarea id="payload">{
+  "reference": "EMG-23001",
+  "data": {
+    "patient_priority": "critical",
+    "distance_km": 5.0,
+    "eta_minutes": 8,
+    "required_capability": "ALS",
+    "vehicle_capability": "ALS",
+    "hospital_beds": 1,
+    "destination": "City Hospital",
+    "location": "South Plaza"
+  }
+}</textarea>
+    <div class="toolbar">
+      <button class="primary" id="createRecord">创建任务</button>
+      <button id="createHospital">登记医院</button>
+    </div>
+    <pre id="output">操作结果会显示在这里。</pre>
+  </details>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo", "Content-Type":"application/json"};
+
+function esc(value) {
+  return String(value === null || value === undefined ? "" : value).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return esc(iso);
+  return d.toLocaleString() + "（本地）";
+}
+async function api(path, options) {
+  const response = await fetch(path, Object.assign({headers}, options || {}));
+  const data = await response.json();
+  if (!response.ok) throw Object.assign(new Error(data.message || "请求失败"), {payload: data});
+  return data;
+}
+function showResult(label, data, error) {
+  const el = document.getElementById("output");
+  el.textContent = (error ? "❌ " + label + "\n" : "✅ " + label + "\n") + JSON.stringify(data, null, 2);
+}
+
+async function loadHospitals() {
+  const data = await api("/api/hospitals");
+  document.getElementById("hospitals").innerHTML = data.items.length ? data.items.map(h => `
+    <tr>
+      <td>${esc(h.name)}</td>
+      <td>${h.total_beds}</td>
+      <td>${h.held_beds}</td>
+      <td>${h.admitted_beds}</td>
+      <td class="${h.available_beds > 0 ? "ok" : "short"}">${h.available_beds}</td>
+      <td class="muted">${esc((h.capabilities || []).join(", ")) || "—"}</td>
+    </tr>`).join("") : `<tr><td colspan="6" class="muted">暂无医院</td></tr>`;
+}
+
+async function loadPending() {
+  const data = await api("/api/pending");
+  document.getElementById("pending").innerHTML = data.items.length ? data.items.map(({record, beds, dispatchable}) => `
+    <tr>
+      <td>${esc(record.reference)}</td>
+      <td>${esc(record.payload.patient_priority)}（评分 ${record.payload.priority_score}）</td>
+      <td>${esc(beds.hospital)}${beds.registered ? "" : ' <span class="tag released">未登记</span>'}</td>
+      <td class="${beds.available_beds > 0 ? "ok" : "short"}">${beds.registered ? beds.available_beds : "—"}</td>
+      <td class="${beds.shortage_beds > 0 ? "short" : ""}">${beds.shortage_beds > 0 ? "缺 " + beds.shortage_beds + " 张" : "0"}</td>
+      <td>${esc(record.payload.required_capability)} / 车 ${esc(record.payload.vehicle_capability)}${record.payload.capability_ok ? "" : "（能力不足）"}</td>
+      <td>${dispatchable && record.payload.capability_ok
+        ? `<button class="primary" onclick="assignTask(${record.id}, ${record.version}, '${esc(beds.hospital)}')">确认派车并占床</button>`
+        : '<span class="muted">暂不可派</span>'}</td>
+    </tr>`).join("") : `<tr><td colspan="7" class="muted">待派区为空</td></tr>`;
+}
+
+const ACTIONS = {
+  assigned: {action: "enroute", label: "车辆已出发", data: () => ({traffic_level: prompt("路况 low/medium/high", "medium")}), stop: true},
+  enroute: {action: "arrive", label: "确认到场", data: () => ({on_scene: true})},
+  onscene: {action: "transport", label: "开始转运", data: () => ({destination_beds: 1})},
+  transporting: {action: "handover", label: "医院交接（转已收治）", data: () => ({handover_accepted: true})}
+};
+const CANCELLABLE = new Set(["received", "assigned", "enroute"]);
+
+async function actOn(id, version, action, body) {
+  return api(`/api/records/${id}/actions/${action}`, {method: "POST", body: JSON.stringify(Object.assign({expected_version: version}, body))});
+}
+async function loadRecords() {
+  const data = await api("/api/records?limit=50");
+  const rows = data.items.filter(r => r.state !== "received");
+  document.getElementById("records").innerHTML = rows.length ? rows.map(r => {
+    const step = ACTIONS[r.state];
+    const buttons = [];
+    if (step) buttons.push(`<button class="primary" onclick="stepTask(${r.id}, ${r.version}, '${step.action}')">${step.label}</button>`);
+    if (CANCELLABLE.has(r.state)) buttons.push(`<button class="danger" onclick="cancelTask(${r.id}, ${r.version})">取消（退回床位）</button>`);
+    return `<tr>
+      <td>${r.id}</td><td>${esc(r.reference)}</td><td><span class="tag ${r.state === "closed" ? "admitted" : r.state === "cancelled" ? "released" : "held"}">${esc(r.state)}</span></td>
+      <td>${esc(r.payload.assigned_vehicle_id || "—")}</td>
+      <td>${esc(r.payload.destination)}</td><td>${r.version}</td>
+      <td>${buttons.join(" ") || "—"}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="7" class="muted">暂无进行中/已结束任务</td></tr>`;
+}
+
+async function loadCommitments() {
+  const data = await api("/api/commitments?limit=100");
+  document.getElementById("commitments").innerHTML = data.items.length ? data.items.map(c => `
+    <tr>
+      <td>${c.id}</td><td>${esc(c.record_reference || c.record_id)}</td><td>${esc(c.hospital_name)}</td>
+      <td><span class="tag ${esc(c.status)}">${esc(c.status)}</span></td>
+      <td>${c.status === "held" && !c.expires_at ? "已到场，等待交接" : fmtTime(c.expires_at)}</td>
+      <td>${fmtTime(c.arrived_at)}</td><td>${fmtTime(c.released_at)}</td>
+      <td class="${c.release_reason ? "short" : ""}">${esc(c.release_reason || "—")}</td>
+      <td class="muted">${esc(c.held_by)}</td>
+    </tr>`).join("") : `<tr><td colspan="9" class="muted">暂无床位承诺</td></tr>`;
+}
+
+async function assignTask(id, version, hospital) {
+  const vehicleId = prompt("车辆编号", "AMB-07");
+  if (!vehicleId) return;
+  const holdMinutes = prompt("床位承诺保留分钟（默认30）", "30");
+  try {
+    const result = await actOn(id, version, "assign", {vehicle_available: true, vehicle_id: vehicleId, hold_minutes: Number(holdMinutes) || 30});
+    showResult("已派车并占用 " + hospital + " 一张床", result);
+  } catch (e) { showResult("派车失败", e.payload || {message: e.message}, true); }
+  refreshAll();
+}
+async function stepTask(id, version, action) {
+  try {
+    let body = {};
+    if (action === "enroute") body = {traffic_level: prompt("路况 low/medium/high", "medium") || "medium"};
+    if (action === "arrive") body = {on_scene: true};
+    if (action === "transport") body = {destination_beds: 1};
+    if (action === "handover") body = {handover_accepted: true};
+    const result = await actOn(id, version, action, body);
+    showResult("操作成功：" + action, result);
+  } catch (e) { showResult("操作失败", e.payload || {message: e.message}, true); }
+  refreshAll();
+}
+async function currentState(id) {
+  const record = await api(`/api/records/${id}`);
+  return record.state;
+}
+async function cancelTask(id, version) {
+  const reason = prompt("取消原因", "患者改道其他医院");
+  if (!reason) return;
+  try {
+    const result = await actOn(id, version, "cancel", {cancel_reason: reason});
+    showResult("任务已取消，床位占用退回", result);
+  } catch (e) { showResult("取消失败", e.payload || {message: e.message}, true); }
+  refreshAll();
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([loadHospitals(), loadPending(), loadRecords(), loadCommitments()]);
+    document.getElementById("updated").textContent = "更新于 " + new Date().toLocaleTimeString();
+  } catch (e) {
+    showResult("加载失败", e.payload || {message: e.message}, true);
+  }
+}
+
+document.getElementById("refresh").onclick = refreshAll;
+document.getElementById("sweep").onclick = async () => {
+  try { showResult("到期结算完成", await api("/api/commitments/expire", {method: "POST"})); }
+  catch (e) { showResult("结算失败", e.payload || {message: e.message}, true); }
+  refreshAll();
+};
+document.getElementById("createRecord").onclick = async () => {
+  try { showResult("任务已创建", await api("/api/records", {method: "POST", body: document.getElementById("payload").value})); }
+  catch (e) { showResult("创建失败", e.payload || {message: e.message}, true); }
+  refreshAll();
+};
+document.getElementById("createHospital").onclick = async () => {
+  try {
+    const parsed = JSON.parse(document.getElementById("payload").value);
+    showResult("医院已登记", await api("/api/hospitals", {method: "POST", body: JSON.stringify(parsed.data ? parsed : {data: parsed})}));
+  } catch (e) { showResult("登记失败", e.payload || {message: e.message}, true); }
+  refreshAll();
+};
+let timer = setInterval(() => { if (document.getElementById("autorefresh").checked) refreshAll(); }, 15000);
+refreshAll();
 </script>
 </body>
 </html>

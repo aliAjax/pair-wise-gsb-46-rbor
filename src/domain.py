@@ -23,6 +23,16 @@ class Conflict(DomainError):
     code = "conflict"
 
 
+class BedShortage(Conflict):
+    """医院可用床位不足，任务需要留在待派区。"""
+
+    code = "bed_shortage"
+
+    def __init__(self, message: str, details: Dict[str, Any] = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
+
 class PermissionDenied(DomainError):
     status = 403
     code = "permission_denied"

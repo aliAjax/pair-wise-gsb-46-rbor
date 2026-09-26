@@ -4,7 +4,7 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .domain import Actor, DomainError, PermissionDenied, ValidationError
 
@@ -12,6 +12,7 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+HOSPITAL_NAME_RE = re.compile(r"^/api/hospitals/([^/]+)$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -57,7 +58,11 @@ def make_handler(service: Any, static_dir: Path):
 
         def _handle_error(self, exc: Exception) -> None:
             if isinstance(exc, DomainError):
-                self._send(exc.status, {"error": exc.code, "message": str(exc)})
+                payload = {"error": exc.code, "message": str(exc)}
+                details = getattr(exc, "details", None)
+                if details:
+                    payload["details"] = details
+                self._send(exc.status, payload)
             else:
                 self._send(500, {"error": "internal_error", "message": "服务内部错误"})
 
@@ -84,6 +89,31 @@ def make_handler(service: Any, static_dir: Path):
                 if match:
                     self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
                     return
+                if parsed.path == "/api/hospitals":
+                    self._send(200, {"items": service.hospital_board(self._actor())})
+                    return
+                match = HOSPITAL_NAME_RE.match(parsed.path)
+                if match:
+                    query = parse_qs(parsed.query)
+                    status = query.get("status", [None])[0]
+                    self._send(200, service.commitments(self._actor(), status=status, hospital_name=unquote(match.group(1))))
+                    return
+                if parsed.path == "/api/pending":
+                    query = parse_qs(parsed.query)
+                    self._send(200, service.pending(self._actor(), limit=int(query.get("limit", ["100"])[0])))
+                    return
+                if parsed.path == "/api/commitments":
+                    query = parse_qs(parsed.query)
+                    self._send(
+                        200,
+                        service.commitments(
+                            self._actor(),
+                            status=query.get("status", [None])[0],
+                            hospital_name=query.get("hospital", [None])[0],
+                            limit=int(query.get("limit", ["200"])[0]),
+                        ),
+                    )
+                    return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
@@ -98,6 +128,12 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/hospitals":
+                    self._send(200, service.register_hospital(self._actor(), body.get("data", {})))
+                    return
+                if parsed.path == "/api/commitments/expire":
+                    self._send(200, service.sweep_expired(self._actor()))
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
