@@ -1,0 +1,11 @@
+{
+  "projectId": "pair-wise-gsb-46",
+  "projectName": "pair-wise-gsb-46",
+  "category": "地狱 Python 模块化项目",
+  "businessDomain": "医疗急救",
+  "projectForm": "完整项目",
+  "codeScope": "backend, frontend",
+  "languages": ["Python", "HTML", "CSS", "JavaScript"],
+  "summary": "急救车调度与目的地分流服务，覆盖优先级评分、能力匹配、车辆冲突和权限审计。",
+  "containerized": false
+}
