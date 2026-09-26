@@ -30,10 +30,19 @@ python3 app.py --db ./data.db --port 8322
 - `GET /api/records/{id}`：记录详情。
 - `GET /api/records/{id}/audit`：审计时间线。
 - `GET /api/stats`：状态统计。
+- `GET /api/reservations`：床位承诺列表，可带`status`和`limit`参数，含到期时间与退回原因。
 - `POST /api/records`：创建记录，请求体为`{"reference":"...","data":{...}}`。
 - `POST /api/records/{id}/actions/{action}`：执行业务动作，请求体为`{"expected_version":1,"data":{...}}`。
 
 除`/health`和`/`外，请求需提供`X-User-Id`、`X-Role`，可选`X-Org`。
+
+## 床位承诺
+
+- 执行`assign`派车时在同一事务内先占用一张床（`bed_reservations`表，状态`held`），可带`hold_minutes`（默认30分钟，最长240分钟）指定占用时长；并发派车被串行化，同一张床不会被承诺两次。
+- 没有余床的任务进入`awaiting_beds`（待派区），`payload.beds_short`记录缺少的床位数，床位空出后可重新执行`assign`。
+- 任务取消（`cancel`）时占用退回，退回原因为"任务取消，占用退回"；到期仍未交接的占用在下次访问时自动退回，原因为"超时未到场，占用自动退回"，并在任务时间线上留下`bed_hold_expired`事件。
+- 医院交接（`handover`）后占用转为`admitted`（已收治）。
+- 占用记录持久化在SQLite中，服务重启后仍然有效。
 
 ## 测试
 

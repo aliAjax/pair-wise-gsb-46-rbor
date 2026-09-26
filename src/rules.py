@@ -7,7 +7,9 @@ from .domain import Actor, Conflict, ValidationError, boolean, choice, integer, 
 INITIAL_STATE = "received"
 CREATE_ROLES = {'dispatcher'}
 ACTION_ROLES = {'assign': {'dispatcher'}, 'enroute': {'dispatcher', 'paramedic'}, 'arrive': {'paramedic'}, 'transport': {'paramedic', 'hospital_coordinator'}, 'handover': {'paramedic', 'hospital_coordinator'}, 'cancel': {'dispatcher'}}
-TRANSITIONS = {'assign': {'received': 'assigned'}, 'enroute': {'assigned': 'enroute'}, 'arrive': {'enroute': 'onscene'}, 'transport': {'onscene': 'transporting'}, 'handover': {'transporting': 'closed'}, 'cancel': {'received': 'cancelled', 'assigned': 'cancelled', 'enroute': 'cancelled'}}
+TRANSITIONS = {'assign': {'received': 'assigned', 'awaiting_beds': 'assigned'}, 'enroute': {'assigned': 'enroute'}, 'arrive': {'enroute': 'onscene'}, 'transport': {'onscene': 'transporting'}, 'handover': {'transporting': 'closed'}, 'cancel': {'received': 'cancelled', 'assigned': 'cancelled', 'enroute': 'cancelled', 'awaiting_beds': 'cancelled'}}
+DEFAULT_HOLD_MINUTES = 30
+MAX_HOLD_MINUTES = 240
 
 
 class DomainRules:
@@ -60,6 +62,12 @@ class DomainRules:
             raise Conflict("当前状态不允许执行%s" % action)
         return allowed
 
+    def bed_hold_minutes(self, data: Dict[str, Any]) -> int:
+        value = data.get("hold_minutes", DEFAULT_HOLD_MINUTES)
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_HOLD_MINUTES:
+            raise ValidationError("hold_minutes必须是1到%s的整数" % MAX_HOLD_MINUTES)
+        return value
+
     def apply_action(self, record: Dict[str, Any], action: str, data: Dict[str, Any]) -> Tuple[str, Dict[str, Any], str]:
         new_state = self.require_transition(record, action)
         data = dict(data or {})
@@ -69,8 +77,8 @@ class DomainRules:
         if action == "assign":
             if not boolean(data, "vehicle_available"):
                 raise ValidationError("车辆当前不可用")
-            if not p["capability_ok"] or float(p["hospital_beds"]) <= 0:
-                raise ValidationError("车辆能力或医院床位不满足")
+            if not p["capability_ok"]:
+                raise ValidationError("车辆能力不满足")
             changes["assigned_vehicle_id"] = text(data, "vehicle_id")
             changes["assigned"] = True
             summary = "已完成派车"

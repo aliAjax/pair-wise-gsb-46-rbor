@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from .audit import AuditRecorder
 from .domain import Actor, PermissionDenied, text
-from .repository import Repository
+from .repository import RELEASE_REASON_CANCELLED, RESERVATION_ADMITTED, RESERVATION_RELEASED, Repository
 from .rules import DomainRules
 
 
@@ -51,7 +51,15 @@ class Service:
             raise PermissionDenied("角色无权执行该操作")
         record = self.repository.get(record_id)
         self.rules.require_transition(record, action)
-        new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
+        data = data or {}
+        if action == "assign":
+            return self._assign(actor, record, int(expected_version), data)
+        new_state, new_payload, summary = self.rules.apply_action(record, action, data)
+        reservation_update = None
+        if action == "cancel":
+            reservation_update = {"to_status": RESERVATION_RELEASED, "reason": RELEASE_REASON_CANCELLED}
+        elif action == "handover":
+            reservation_update = {"to_status": RESERVATION_ADMITTED, "reason": None}
         return self.repository.mutate(
             record_id=record_id,
             expected_version=int(expected_version),
@@ -59,8 +67,30 @@ class Service:
             payload=new_payload,
             actor_id=actor.user_id,
             action=action,
-            details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
+            details={"summary": summary, "input": data, "from": record["state"], "to": new_state},
+            reservation_update=reservation_update,
         )
+
+    def _assign(self, actor: Actor, record: Dict[str, Any], expected_version: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        """派车即占床：规则校验后由仓储在同一事务内决定派车或进入待派区。"""
+        _, new_payload, _ = self.rules.apply_action(record, "assign", data)
+        hold_minutes = self.rules.bed_hold_minutes(data)
+        assign_changes = {"assigned_vehicle_id": new_payload["assigned_vehicle_id"], "assigned": True}
+        return self.repository.assign_with_bed_hold(
+            record_id=record["id"],
+            expected_version=expected_version,
+            actor_id=actor.user_id,
+            hospital=record["payload"]["destination"],
+            beds_needed=1,
+            hold_minutes=hold_minutes,
+            assign_changes=assign_changes,
+            audit_input=data,
+        )
+
+    def list_reservations(self, actor: Actor, status: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        return self.repository.list_reservations(status=status, limit=limit)
 
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)

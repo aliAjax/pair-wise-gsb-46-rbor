@@ -9,25 +9,68 @@
     main { max-width: 960px; margin: auto; }
     button { padding: .55rem .9rem; cursor: pointer; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #d5dbe3; padding: .45rem .6rem; text-align: left; font-size: .92rem; }
+    th { background: #eef2f6; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
 <main>
   <h1>急救车调度与目的地分流</h1>
   <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
+  <div class="row">
+    <button id="load">加载记录</button>
+    <button id="stats">查看状态统计</button>
+    <button id="pending">查看待派任务</button>
+    <button id="reservations">查看床位承诺</button>
+  </div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
+  <table id="reservation-table" class="hidden">
+    <thead>
+      <tr><th>ID</th><th>任务编号</th><th>医院</th><th>床位数</th><th>状态</th><th>到期时间</th><th>退回原因</th></tr>
+    </thead>
+    <tbody id="reservation-body"></tbody>
+  </table>
 </main>
 <script>
 const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
+const STATUS_LABEL = {"held":"占用中","released":"已退回","admitted":"已收治"};
+const output = document.getElementById("output");
+const table = document.getElementById("reservation-table");
+const tbody = document.getElementById("reservation-body");
+function showPre(data) {
+  table.classList.add("hidden");
+  output.classList.remove("hidden");
+  output.textContent = JSON.stringify(data, null, 2);
+}
 async function show(path) {
   const response = await fetch(path, {headers});
+  showPre(await response.json());
+}
+async function showReservations() {
+  const response = await fetch("/api/reservations", {headers});
   const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  tbody.innerHTML = "";
+  for (const item of data.items) {
+    const row = document.createElement("tr");
+    const cells = [item.id, item.reference, item.hospital, item.beds,
+      STATUS_LABEL[item.status] || item.status, item.expires_at || "—", item.released_reason || "—"];
+    for (const value of cells) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    tbody.appendChild(row);
+  }
+  output.classList.add("hidden");
+  table.classList.remove("hidden");
 }
 document.getElementById("load").onclick = () => show("/api/records?limit=20");
 document.getElementById("stats").onclick = () => show("/api/stats");
+document.getElementById("pending").onclick = () => show("/api/records?state=awaiting_beds&limit=50");
+document.getElementById("reservations").onclick = showReservations;
 </script>
 </body>
 </html>
